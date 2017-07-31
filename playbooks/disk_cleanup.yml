@@ -1,0 +1,55 @@
+---
+- hosts: all
+  vars:
+    mountpath: /tmp
+    file_age: 7d
+  tasks:
+  - name: Define files older than {{ file_age }} days in {{ mountpath }}
+    find:
+      paths: "{{ mountpath }}"
+      age: "{{ file_age }}"
+    register: files_to_delete
+
+  - name: Purge files older than {{ file_age }} days in {{ mountpath }}
+    file:
+      path: "{{ item.path }}"
+      state: absent
+    with_items: "{{ files_to_delete.files }}"
+
+  - name: Test disk space available
+    assert:
+      that:
+          - item.mount != '"{{ mountpath }}"' or {{ item.mount == '"{{ mountpath }}"' and ( item.size_available < item.size_total - ( item.size_total|float * 0.1 ) ) }}
+    with_items: '{{ ansible_mounts }}'
+    ignore_errors: yes
+    register: disk_free
+
+  - name: Fail when {{ mountpath }} space needs attention
+    fail:
+       msg: 'Disk space needs attention.'
+    when: disk_free|failed
+
+  - name: Cleanup of {{ mountpath }} disk space was a success
+    debug:
+       msg: 'Disk space resolved.'
+    when: disk_free|changed
+
+  - name: email_fixed
+    mail:
+      host="smtp.myserver.com"
+      port="25"
+      from="admin@example.com"
+      to="operators@example.com"
+      subject='Resolved Alert for {{ inventory_hostname }}'
+      body='Ansible received and resolved an alert from Zabbix to clean up {{ mountpath }} on {{ inventory_hostname }}.'
+    when: disk_free|changed
+
+  - name: email_fixme
+    mail:
+      host="smtp.myserver.com"
+      port="25"
+      from="admin@example.com"
+      to="operators@example.com"
+      subject='Critical Alert for {{ inventory_hostname }}'
+      body='Ansible received an alert from Zabbix to clean up {{ mountpath }} on {{ inventory_hostname }}. However; after purging files older than 7 days old the disk is still saturated please investigate.'
+    when: disk_free|failed
